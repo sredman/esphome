@@ -66,6 +66,14 @@ class BLEScanListener {
   ~BLEScanListener() = default;  // deletion via this interface is not part of the contract
 };
 
+class BK72xxBLENoticeListener {
+ public:
+  virtual void on_ble_notice(uint8_t notice, void *param) = 0;
+
+ protected:
+  ~BK72xxBLENoticeListener() = default;
+};
+
 // Maximum reports buffered between the BLE task and loop().
 static constexpr uint8_t MAX_SCAN_REPORT_QUEUE_SIZE = 64;
 
@@ -91,6 +99,12 @@ class BK72xxBLE final : public Component {
   /// request_scan_listener_slot(), which emits BK72XX_BLE_SCAN_LISTENER_COUNT.
   void register_scan_listener(BLEScanListener *listener) { this->scan_listeners_.push_back(listener); }
 #endif
+
+  void set_notice_listener(BK72xxBLENoticeListener *listener) { this->notice_listener_ = listener; }
+  BK72xxBLENoticeListener *get_notice_listener() const { return this->notice_listener_; }
+
+  void inhibit_scan();
+  void release_scan_inhibit();
 
   /// Request a scan (interval/window in 0.625 ms BLE units); enables the
   /// stack first if needed. PENDING until the scan is observed running —
@@ -147,6 +161,9 @@ class BK72xxBLE final : public Component {
   bool release_warned_{false};  // gates the release WARN; widens the pump gate
   bool restarting_{false};      // mode-change release in flight; teardown deadline governs until released
   bool enable_on_boot_{false};
+  bool scan_desired_during_inhibit_{false};
+  uint8_t scan_inhibit_count_{0};
+  BK72xxBLENoticeListener *notice_listener_{nullptr};
   // PENDING means advance_() has more to do; loop() drives it, paced and
   // (for a bring-up) bounded.
   ScanOpResult last_result_{ScanOpResult::SETTLED};

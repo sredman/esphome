@@ -15,7 +15,12 @@ from esphome.config_helpers import (
     frameworks_for_platforms,
 )
 import esphome.config_validation as cv
-from esphome.const import PLATFORM_ESP32, PLATFORM_RP2, PlatformFramework
+from esphome.const import (
+    PLATFORM_BK72XX,
+    PLATFORM_ESP32,
+    PLATFORM_RP2,
+    PlatformFramework,
+)
 from esphome.core import CORE
 from esphome.types import ConfigType
 
@@ -28,8 +33,10 @@ def AUTO_LOAD() -> list[str]:
         return ["ble_device_base", "esp32_ble_tracker"]
     if CORE.is_rp2:
         return ["ble_device_base", "rp2040_ble"]
+    if CORE.is_bk72xx:
+        return ["ble_device_base", "bk72xx_ble"]
     if CORE.target_platform is None:
-        return ["ble_device_base", "esp32_ble_tracker", "rp2040_ble"]
+        return ["ble_device_base", "bk72xx_ble", "esp32_ble_tracker", "rp2040_ble"]
     return ["ble_device_base"]
 
 
@@ -46,7 +53,10 @@ RP2_MAX_CONNECTIONS = rp2040_ble.MAX_CONNECTIONS
 
 # Slot limits for the hub platforms running the connection-capable proxy;
 # the backend registry itself is _PLATFORM_BACKENDS below.
-HUB_MAX_CONNECTIONS: dict[str, int] = {PLATFORM_RP2: RP2_MAX_CONNECTIONS}
+HUB_MAX_CONNECTIONS: dict[str, int] = {
+    PLATFORM_RP2: RP2_MAX_CONNECTIONS,
+    PLATFORM_BK72XX: 1,
+}
 
 # The hub-platform wrapper and the backend codegen classes.
 HubBluetoothConnection = bluetooth_connection_ns.class_("BluetoothConnection")
@@ -54,6 +64,7 @@ RP2GattClient = bluetooth_connection_ns.class_("RP2GattClient", cg.Component)
 BluedroidGattClient = bluetooth_connection_ns.class_(
     "BluedroidGattClient", cg.Component
 )
+BK72xxGattClient = bluetooth_connection_ns.class_("BK72xxGattClient", cg.Component)
 
 CONF_BACKEND_ID = "backend_id"
 
@@ -83,6 +94,14 @@ def _rp2_schema_fragment() -> cv.Schema:
     )
 
 
+def _bk72xx_schema_fragment() -> cv.Schema:
+    from esphome.components import bk72xx_ble
+
+    return cv.Schema(
+        {cv.GenerateID(bk72xx_ble.CONF_BK72XX_BLE_ID): cv.use_id(bk72xx_ble.BK72xxBLE)}
+    )
+
+
 async def _esp32_register(backend: cg.MockObj, config: ConfigType) -> None:
     from esphome.components import esp32_ble_tracker
 
@@ -108,6 +127,13 @@ async def _rp2_register(backend: cg.MockObj, config: ConfigType) -> None:
     await cg.register_parented(backend, config[rp2040_ble.CONF_RP2040_BLE_ID])
 
 
+async def _bk72xx_register(backend: cg.MockObj, config: ConfigType) -> None:
+    from esphome.components import bk72xx_ble, ota
+
+    ota.request_ota_state_listeners()
+    await cg.register_parented(backend, config[bk72xx_ble.CONF_BK72XX_BLE_ID])
+
+
 @dataclass(frozen=True)
 class _PlatformBackend:
     """One platform's backend: codegen class, extra schema keys, and stack
@@ -129,6 +155,9 @@ _PLATFORM_BACKENDS: dict[str, _PlatformBackend] = {
         BluedroidGattClient, _esp32_schema_fragment, _esp32_register
     ),
     PLATFORM_RP2: _PlatformBackend(RP2GattClient, _rp2_schema_fragment, _rp2_register),
+    PLATFORM_BK72XX: _PlatformBackend(
+        BK72xxGattClient, _bk72xx_schema_fragment, _bk72xx_register
+    ),
 }
 
 
@@ -198,6 +227,7 @@ SOURCE_FILE_FRAMEWORKS: dict[str, set[PlatformFramework]] = {
         PlatformFramework.ESP32_IDF,
     },
     "bluetooth_connection_rp2.cpp": {PlatformFramework.RP2_ARDUINO},
+    "bluetooth_connection_bk72xx.cpp": {PlatformFramework.BK72XX_ARDUINO},
 }
 
 FILTER_SOURCE_FILES = filter_source_files_from_platform(SOURCE_FILE_FRAMEWORKS)

@@ -20,6 +20,7 @@ prebuilt libble_<chip>.a per SoC). This component only calls into it via the
 public ble_api.h.
 """
 
+from collections.abc import Callable, MutableMapping
 import logging
 
 import esphome.codegen as cg
@@ -33,7 +34,7 @@ from esphome.components.libretiny.const import (
 )
 import esphome.config_validation as cv
 from esphome.const import CONF_ENABLE_ON_BOOT, CONF_ID
-from esphome.core import EsphomeError
+from esphome.core import CORE, EsphomeError
 from esphome.types import ConfigType
 
 DEPENDENCIES = ["bk72xx"]
@@ -41,6 +42,13 @@ CODEOWNERS = ["@Bl00d-B0b"]
 DOMAIN = "bk72xx_ble"
 
 _LOGGER = logging.getLogger(__name__)
+
+CONF_BK72XX_BLE_ID = "bk72xx_ble_id"
+
+KEY_USED_CONNECTION_SLOTS = "used_connection_slots"
+
+# Hard platform cap on concurrent GATT connections: BDK is configured for 1 connection.
+MAX_CONNECTIONS = 1
 
 bk72xx_ble_ns = cg.esphome_ns.namespace("bk72xx_ble")
 BK72xxBLE = bk72xx_ble_ns.class_("BK72xxBLE", cg.Component)
@@ -54,6 +62,34 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_ENABLE_ON_BOOT, default=False): cv.boolean,
     }
 ).extend(cv.COMPONENT_SCHEMA)
+
+
+def consume_connection_slots(
+    value: int, consumer: str
+) -> Callable[[MutableMapping], MutableMapping]:
+    """Reserve BLE connection slots for a component (the esp32_ble/rp2040_ble pattern);
+    the total is checked against MAX_CONNECTIONS in final validation."""
+
+    def _consume_connection_slots(config: MutableMapping) -> MutableMapping:
+        data: dict = CORE.data.setdefault(DOMAIN, {})
+        slots: list[str] = data.setdefault(KEY_USED_CONNECTION_SLOTS, [])
+        slots.extend([consumer] * value)
+        return config
+
+    return _consume_connection_slots
+
+
+def validate_connection_slots() -> None:
+    """Fail when consumers claimed more slots than the platform cap."""
+    if CORE.testing_mode:
+        return
+    used = CORE.data.get(DOMAIN, {}).get(KEY_USED_CONNECTION_SLOTS, [])
+    if len(used) > MAX_CONNECTIONS:
+        raise cv.Invalid(
+            f"BLE components require {len(used)} connection slots but the "
+            f"bk72xx maximum is {MAX_CONNECTIONS}. "
+            f"Components: {', '.join(used)}"
+        )
 
 
 # Once per registered scan listener; sizes the controller's StaticVector
@@ -94,6 +130,7 @@ def _final_validate(config: ConfigType) -> None:
         "with BLE running, the Beken SDK's MCU sleep halts the device once the "
         "station is stopped (https://github.com/esphome/esphome/issues/18592)"
     )
+    validate_connection_slots()
 
 
 FINAL_VALIDATE_SCHEMA = _final_validate
@@ -114,7 +151,9 @@ async def to_code(config: ConfigType) -> None:
     # SAME key — and add_platformio_option appends list values, it never replaces.
     # The platform therefore skips its disable when this component is configured,
     # so this =1 is the single CFG_SUPPORT_BLE define emitted.
-    cg.add_platformio_option("custom_options.sys_config#h", ["CFG_SUPPORT_BLE=1"])
+    cg.add_platformio_option(
+        "custom_options.sys_config#h", ["CFG_SUPPORT_BLE=1", "CFG_BLE_INIT_NUM=1"]
+    )
 
     # Pin the Beken BDK release the BLE 5.x stack is validated against. The
     # bundled 3.0.33 has an older BLE header/library layout — and with

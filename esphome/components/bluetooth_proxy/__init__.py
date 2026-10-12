@@ -201,6 +201,49 @@ def _rp2_config_schema() -> cv.All:
     return cv.All(schema, populate_connections)
 
 
+@functools.cache
+def _bk72xx_config_schema() -> cv.All:
+    """Full proxy on the bk72xx BLE hub: active connections through the Beken
+    GATT client backend in bluetooth_connection."""
+    connection_schema = bluetooth_connection.hub_connection_schema(PLATFORM_BK72XX)
+
+    def populate_connections(config: ConfigType) -> ConfigType:
+        from esphome.components import bk72xx_ble
+
+        if not config[CONF_ACTIVE]:
+            return config
+        connection_slots: int = config[CONF_CONNECTION_SLOTS]
+        bk72xx_ble.consume_connection_slots(connection_slots, "bluetooth_proxy")(config)
+        return {
+            **config,
+            CONF_CONNECTIONS: [connection_schema({}) for _ in range(connection_slots)],
+        }
+
+    max_conn = bluetooth_connection.HUB_MAX_CONNECTIONS[PLATFORM_BK72XX]
+    schema = (
+        cv.Schema(
+            {
+                **_COMMON_SCHEMA_KEYS,
+                cv.Optional(CONF_ACTIVE, default=True): cv.boolean,
+                cv.Optional(
+                    CONF_CONNECTION_SLOTS,
+                    default=min(DEFAULT_CONNECTION_SLOTS, max_conn),
+                ): cv.All(
+                    cv.positive_int,
+                    cv.Range(
+                        min=1,
+                        max=max_conn,
+                        msg=f"bk72xx supports at most {max_conn} connection slot(s)",
+                    ),
+                ),
+            }
+        )
+        .extend(ble_device_base.BLE_DEVICE_SCHEMA)
+        .extend(cv.COMPONENT_SCHEMA)
+    )
+    return cv.All(schema, populate_connections)
+
+
 async def _connections_to_code(var: cg.MockObj, config: ConfigType) -> None:
     """One wrapper + backend pair per slot; the platform-specific backend
     registration lives in bluetooth_connection.new_gatt_backend()."""
@@ -224,7 +267,10 @@ async def _connections_to_code(var: cg.MockObj, config: ConfigType) -> None:
 # Per-platform schema builders; every key of
 # bluetooth_connection.HUB_MAX_CONNECTIONS needs an entry here (pinned by
 # tests/component_tests/bluetooth_proxy/). Connection codegen is shared.
-_GATT_HUB_SCHEMAS = {PLATFORM_RP2: _rp2_config_schema}
+_GATT_HUB_SCHEMAS = {
+    PLATFORM_RP2: _rp2_config_schema,
+    PLATFORM_BK72XX: _bk72xx_config_schema,
+}
 
 
 # Keys every platform arm declares identically; each arm spreads this dict so

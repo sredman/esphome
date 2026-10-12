@@ -100,16 +100,21 @@ static BK72xxBLE *s_ble = nullptr;  // NOLINT(cppcoreguidelines-avoid-non-const-
 // happens in loop() on the main task.
 // ---------------------------------------------------------------------------
 static void ble_notice_callback(ble_notice_t notice, void *param) {
-  if (s_ble == nullptr || param == nullptr)
+  if (s_ble == nullptr)
     return;
-  if (notice != BLE_5_REPORT_ADV)
+  if (notice == BLE_5_REPORT_ADV) {
+    if (param == nullptr)
+      return;
+    const recv_adv_t *info = reinterpret_cast<const recv_adv_t *>(param);
+    // rssi is a signed dBm carried in a uint8_t; cast through int8_t (standard for
+    // a signed dBm value packed in a uint8_t).
+    s_ble->enqueue_scan_report(info->adv_addr, static_cast<int8_t>(info->rssi), info->adv_addr_type,
+                               static_cast<uint8_t>(info->evt_type), info->data, info->data_len);
     return;
-
-  const recv_adv_t *info = reinterpret_cast<const recv_adv_t *>(param);
-  // rssi is a signed dBm carried in a uint8_t; cast through int8_t (standard for
-  // a signed dBm value packed in a uint8_t).
-  s_ble->enqueue_scan_report(info->adv_addr, static_cast<int8_t>(info->rssi), info->adv_addr_type,
-                             static_cast<uint8_t>(info->evt_type), info->data, info->data_len);
+  }
+  if (s_ble->get_notice_listener() != nullptr) {
+    s_ble->get_notice_listener()->on_ble_notice(static_cast<uint8_t>(notice), param);
+  }
 }
 
 void BK72xxBLE::enqueue_scan_report(const uint8_t *mac, int8_t rssi, uint8_t addr_type, uint8_t evt_type,
@@ -307,6 +312,11 @@ ScanOpResult BK72xxBLE::scan_start(uint16_t interval, uint16_t window, bool acti
     this->enable();
 
   const ScanParams params{active, interval, window};
+  if (this->scan_inhibit_count_ > 0) {
+    this->scan_desired_during_inhibit_ = true;
+    this->requested_ = params;
+    return ScanOpResult::PENDING;
+  }
   // A new episode refills the budget and gets a fresh teardown deadline; a
   // re-call observing an in-flight bring-up (last result PENDING) must not.
   if (this->last_result_ != ScanOpResult::PENDING || !this->scan_wanted_ || params != this->requested_) {
@@ -319,6 +329,7 @@ ScanOpResult BK72xxBLE::scan_start(uint16_t interval, uint16_t window, bool acti
 }
 
 void BK72xxBLE::scan_stop() {
+  this->scan_desired_during_inhibit_ = false;
   if (this->scan_wanted_) {
     // A stamp inherited from a stuck restart would fail the stop on its
     // first advance.
@@ -326,6 +337,27 @@ void BK72xxBLE::scan_stop() {
   }
   this->scan_wanted_ = false;
   this->advance_();
+}
+
+void BK72xxBLE::inhibit_scan() {
+  if (this->scan_inhibit_count_++ == 0) {
+    if (this->scan_wanted_) {
+      this->scan_desired_during_inhibit_ = true;
+      this->scan_stop();
+    }
+  }
+}
+
+void BK72xxBLE::release_scan_inhibit() {
+  if (this->scan_inhibit_count_ == 0)
+    return;
+  this->scan_inhibit_count_--;
+  if (this->scan_inhibit_count_ == 0) {
+    if (this->scan_desired_during_inhibit_) {
+      this->scan_desired_during_inhibit_ = false;
+      this->scan_start(this->requested_.interval, this->requested_.window, this->requested_.active);
+    }
+  }
 }
 
 bool BK72xxBLE::flush_pending_stop(uint32_t timeout_ms) {
