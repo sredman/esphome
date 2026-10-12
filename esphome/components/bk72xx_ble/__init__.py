@@ -152,7 +152,7 @@ async def to_code(config: ConfigType) -> None:
     # The platform therefore skips its disable when this component is configured,
     # so this =1 is the single CFG_SUPPORT_BLE define emitted.
     cg.add_platformio_option(
-        "custom_options.sys_config#h", ["CFG_SUPPORT_BLE=1", "CFG_BLE_INIT_NUM=1"]
+        "custom_options.sys_config#h", ["CFG_SUPPORT_BLE=1", "CFG_BLE_INIT_NUM=0"]
     )
 
     # Pin the Beken BDK release the BLE 5.x stack is validated against. The
